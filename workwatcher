@@ -1,0 +1,111 @@
+#!/usr/bin/env python3
+
+"""
+workwatcher
+
+Usage:
+    workwatcher log <folder>
+    workwatcher show
+    workwatcher clear
+    workwatcher (-h | --help)
+    workwatcher (-v | --version)
+
+Commands:
+    log     Check folder for activity and log result. Should be
+            called at least every {} minutes.
+    show    Convert the logfile into a human readable output.
+    clear   Clear the logfile.
+
+Options:
+    -h --help       Show usage information and exit.
+    -v --version    Print the version number and exit.
+"""
+
+import os
+import sys
+import time
+import datetime
+
+import docopt
+
+
+VERSION = "1.0"
+BLACKLIST = ["node_modules"]
+LOGFILE = os.path.expanduser("~/workwatcher.log")
+INTERVAL = 5 # minutes
+TOLERANCE = 2 * INTERVAL
+
+
+def latest_mtime(path):
+    if path.split("/")[-1] in BLACKLIST:
+        return 0
+
+    if not os.path.isdir(path):
+        return os.stat(path).st_mtime
+
+    mtimes = list(map(lambda x: latest_mtime(os.path.join(path, x)), os.listdir(path)))
+    mtimes.append(os.stat(path).st_mtime)
+    return max(mtimes) if len(mtimes) > 0 else 0
+
+
+def log(path):
+    latest = latest_mtime(path)
+
+    delta = datetime.datetime.now() - datetime.datetime.fromtimestamp(latest)
+    if delta.seconds > INTERVAL * 60:
+        return
+
+    with open(LOGFILE, "a") as f:
+        f.write("{}\n".format(int(time.time())))
+
+
+def show(format="plain"):
+    with open(LOGFILE, "r") as f:
+        times = list(map(lambda x: int(x), f.readlines()))
+
+    dts = map(lambda x: datetime.datetime.fromtimestamp(x), times)
+    dts = list(set(map(lambda x: x - datetime.timedelta(minutes=x.minute % INTERVAL, seconds=x.second, microseconds=x.microsecond), dts)))
+    dts.sort()
+
+    chunks = []
+    for dt in dts:
+        if len(chunks) == 0 or chunks[-1][0].date() != dt.date() or dt - chunks[-1][1] > datetime.timedelta(minutes=INTERVAL):
+            chunks.append([dt, dt + datetime.timedelta(minutes=INTERVAL)])
+        else:
+            chunks[-1][1] = dt + datetime.timedelta(minutes=INTERVAL)
+
+    if format == "plain":
+        last = None
+        for c in chunks:
+            if last == None or c[0].date() != last.date():
+                print("{}# {}".format("\n" if last is not None else "", c[0].strftime("%Y-%m-%d")))
+            delta = c[1] - c[0]
+            print("{} - {} ({:02}:{:02})".format(c[0].strftime("%H:%M"), c[1].strftime("%H:%M"),
+                    delta.seconds // 3600, (delta.seconds % 3600) // 60))
+            last = c[0]
+
+    if format == "csv":
+        print("Date; Start; End; Duration")
+        for c in chunks:
+            delta = c[1] - c[0]
+            print("{}; {}; {}; {:02}:{:02}".format(c[0].strftime("%Y-%m-%d"),
+                    c[0].strftime("%H:%M"), c[1].strftime("%H:%M"),
+                    delta.seconds // 3600, (delta.seconds % 3600) // 60))
+
+
+def clear():
+    open(LOGFILE, "w").close()
+
+
+def main(args):
+    if args["log"]:
+        log(os.path.expanduser(args["<folder>"]))
+
+    if args["show"]:
+        show()
+
+    if args["clear"]:
+        clear()
+
+if __name__ == "__main__":
+    main(docopt.docopt(__doc__.format(INTERVAL), version=VERSION))
